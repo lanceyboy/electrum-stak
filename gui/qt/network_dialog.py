@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight STRAKS client
+# Electrum - lightweight Bitcoin client
 # Copyright (C) 2012 thomasv@gitorious
 #
 # Permission is hereby granted, free of charge, to any person
@@ -30,10 +30,10 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 import PyQt5.QtCore as QtCore
 
-from electrum_stak.i18n import _
-from electrum_stak.bitcoin import NetworkConstants
-from electrum_stak.util import print_error
-from electrum_stak.network import serialize_server, deserialize_server
+from electrum.i18n import _
+from electrum import constants
+from electrum.util import print_error
+from electrum.network import serialize_server, deserialize_server
 
 from .util import *
 
@@ -393,7 +393,7 @@ class NetworkChoiceLayout(object):
     def change_protocol(self, use_ssl):
         p = 's' if use_ssl else 't'
         host = self.server_host.text()
-        pp = self.servers.get(host, NetworkConstants.DEFAULT_PORTS)
+        pp = self.servers.get(host, constants.net.DEFAULT_PORTS)
         if p not in pp.keys():
             p = list(pp.keys())[0]
         port = pp[p]
@@ -418,7 +418,7 @@ class NetworkChoiceLayout(object):
             self.change_server(str(x.text(0)), self.protocol)
 
     def change_server(self, host, protocol):
-        pp = self.servers.get(host, NetworkConstants.DEFAULT_PORTS)
+        pp = self.servers.get(host, constants.net.DEFAULT_PORTS)
         if protocol and protocol not in protocol_letters:
             protocol = None
         if protocol:

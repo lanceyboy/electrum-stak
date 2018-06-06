@@ -15,17 +15,17 @@ string = string.replace("##VERSION_ANDROID##", version_android)
 string = string.replace("##VERSION_APK##", version_apk)
 
 files = {
-    'tgz': "Electrum-STAK-%s.tar.gz" % version,
-    'zip': "Electrum-STAK-%s.zip" % version,
-    'mac': "electrum-stak-%s.dmg" % version_mac,
-    'win': "electrum-stak-%s.exe" % version_win,
-    'win_setup': "electrum-stak-%s-setup.exe" % version_win,
-    'win_portable': "electrum-stak-%s-portable.exe" % version_win,
+    'tgz': "Electrum-%s.tar.gz" % version,
+    'zip': "Electrum-%s.zip" % version,
+    'mac': "electrum-%s.dmg" % version_mac,
+    'win': "electrum-%s.exe" % version_win,
+    'win_setup': "electrum-%s-setup.exe" % version_win,
+    'win_portable': "electrum-%s-portable.exe" % version_win,
 }
 
 for k, n in files.items():
     path = "dist/%s"%n
-    link = "https://download.electrum-stak.org/%s/%s"%(version,n)
+    link = "https://download.electrum.org/%s/%s"%(version,n)
     if not os.path.exists(path):
         os.system("wget -q %s -O %s" % (link, path))
     if not os.path.getsize(path):
@@ -41,7 +41,7 @@ for k, n in files.items():
         string = re.sub("<div id=\"%s\">(.*?)</div>"%k, '', string, flags=re.DOTALL + re.MULTILINE)
         continue
     if os.system("gpg --verify %s"%sigpath) != 0:
-        raise BaseException(sigpath)
+        raise Exception(sigpath)
     string = string.replace("##link_%s##"%k, link)
 
 

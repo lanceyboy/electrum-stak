@@ -1,27 +1,21 @@
-#!/bin/bash
-RED='\033[0;31m'
-BLUE='\033[0,34m'
-NC='\033[0m' # No Color
-function info {
-	printf "\r💬 ${BLUE}INFO:${NC} ${1}\n"
-}
-function fail {
-    printf "\r🗯 ${RED}ERROR:${NC} ${1}\n"
-    exit 1
-}
+#!/usr/bin/env bash
 
-build_dir=$(dirname "$0")
-test -n "$build_dir" -a -d "$build_dir" || exit
-cd $build_dir/../..
+# Parameterize
+PYTHON_VERSION=3.6.4
+BUILDDIR=/tmp/electrum-build
+PACKAGE=Electrum
+GIT_REPO=https://github.com/spesmilo/electrum
+LIBSECP_VERSION=452d8e4d2a2f9f1b5be6b02e18f1ba102e5ca0b4
+
+. $(dirname "$0")/base.sh
+
+src_dir=$(dirname "$0")
+cd $src_dir/../..
 
 export PYTHONHASHSEED=22
-VERSION=`git describe --tags`
+VERSION=`git describe --tags --dirty`
 
-# Paramterize
-PYTHON_VERSION=3.6.4
-BUILDDIR=/tmp/electrum-stak-build
-PACKAGE=Electrum-STAK
-GIT_REPO=https://github.com/squbs/electrum
+which brew > /dev/null 2>&1 || fail "Please install brew from https://brew.sh/ to continue"
 
 info "Installing Python $PYTHON_VERSION"
 export PATH="~/.pyenv/bin:~/.pyenv/shims:~/Library/Python/3.6/bin:$PATH"
@@ -34,8 +28,9 @@ PYTHON_CONFIGURE_OPTS="--enable-framework" pyenv install -s $PYTHON_VERSION && \
 pyenv global $PYTHON_VERSION || \
 fail "Unable to use Python $PYTHON_VERSION"
 
+
 info "Installing pyinstaller"
-python3 -m pip install pyinstaller --user || fail "Could not install pyinstaller"
+python3 -m pip install git+https://github.com/ecdsa/pyinstaller@fix_2952 -I --user || fail "Could not install pyinstaller"
 
 info "Using these versions for building $PACKAGE:"
 sw_vers
@@ -45,38 +40,55 @@ pyinstaller --version
 
 rm -rf ./dist
 
+git submodule init
+git submodule update
 
 rm  -rf $BUILDDIR > /dev/null 2>&1
 mkdir $BUILDDIR
 
-info "Downloading icons and locale..."
-for repo in stak-icons locale; do
-  git clone $GIT_REPO-$repo $BUILDDIR/electrum-$repo
-done
-
-cp -R $BUILDDIR/electrum-locale/locale/ ./lib/locale/
-cp    $BUILDDIR/electrum-stak-icons/icons_rc.py ./gui/qt/
+cp -R ./contrib/deterministic-build/electrum-locale/locale/ ./lib/locale/
+cp    ./contrib/deterministic-build/electrum-icons/icons_rc.py ./gui/qt/
 
 
 info "Downloading libusb..."
-curl https://homebrew.bintray.com/bottles/libusb-1.0.21.el_capitan.bottle.tar.gz | \
+curl https://homebrew.bintray.com/bottles/libusb-1.0.22.el_capitan.bottle.tar.gz | \
 tar xz --directory $BUILDDIR
-cp $BUILDDIR/libusb/1.0.21/lib/libusb-1.0.dylib contrib/build-osx
+cp $BUILDDIR/libusb/1.0.22/lib/libusb-1.0.dylib contrib/build-osx
+
+info "Building libsecp256k1"
+brew install autoconf automake libtool
+git clone https://github.com/bitcoin-core/secp256k1 $BUILDDIR/secp256k1
+pushd $BUILDDIR/secp256k1
+git reset --hard $LIBSECP_VERSION
+git clean -f -x -q
+./autogen.sh
+./configure --enable-module-recovery --enable-experimental --enable-module-ecdh --disable-jni
+make
+popd
+cp $BUILDDIR/secp256k1/.libs/libsecp256k1.0.dylib contrib/build-osx
+
 
 info "Installing requirements..."
-python3 -m pip install -r ./contrib/deterministic-build/requirements.txt --user && \
-python3 -m pip install -r ./contrib/deterministic-build/requirements-binaries.txt --user || \
+python3 -m pip install -Ir ./contrib/deterministic-build/requirements.txt --user && \
+python3 -m pip install -Ir ./contrib/deterministic-build/requirements-binaries.txt --user || \
 fail "Could not install requirements"
 
 info "Installing hardware wallet requirements..."
-python3 -m pip install -r ./contrib/deterministic-build/requirements-hw.txt --user || \
+python3 -m pip install -Ir ./contrib/deterministic-build/requirements-hw.txt --user || \
 fail "Could not install hardware wallet requirements"
 
 info "Building $PACKAGE..."
 python3 setup.py install --user > /dev/null || fail "Could not build $PACKAGE"
 
+info "Faking timestamps..."
+for d in ~/Library/Python/ ~/.pyenv .; do
+  pushd $d
+  find . -exec touch -t '200101220000' {} +
+  popd
+done
+
 info "Building binary"
 pyinstaller --noconfirm --ascii --name $VERSION contrib/build-osx/osx.spec || fail "Could not build binary"
 
 info "Creating .DMG"
-hdiutil create -fs HFS+ -volname $PACKAGE -srcfolder dist/$PACKAGE.app dist/electrum-stak-$VERSION.dmg || fail "Could not create .DMG"
+hdiutil create -fs HFS+ -volname $PACKAGE -srcfolder dist/$PACKAGE.app dist/electrum-$VERSION.dmg || fail "Could not create .DMG"

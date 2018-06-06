@@ -1,6 +1,6 @@
 
-from electrum_stak.i18n import _
-from electrum_stak.plugins import run_hook
+from electrum.i18n import _
+from electrum.plugins import run_hook
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import QFileDialog
@@ -46,12 +46,16 @@ class ScanQRTextEdit(ButtonsTextEdit, MessageBoxMixin):
         fileName, __ = QFileDialog.getOpenFileName(self, 'select file')
         if not fileName:
             return
-        with open(fileName, "r") as f:
-            data = f.read()
-        self.setText(data)
+        try:
+            with open(fileName, "r") as f:
+                data = f.read()
+        except BaseException as e:
+            self.show_error(_('Error opening file') + ':\n' + str(e))
+        else:
+            self.setText(data)
 
     def qr_input(self):
-        from electrum_stak import qrscanner, get_config
+        from electrum import qrscanner, get_config
         try:
             data = qrscanner.scan_barcode(get_config().get_video_device())
         except BaseException as e:

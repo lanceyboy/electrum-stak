@@ -5,9 +5,9 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, coll
 import sys
 import os
 
-PACKAGE='Electrum-STAK'
-PYPKG='electrum_stak'
-MAIN_SCRIPT='electrum-stak'
+PACKAGE='Electrum'
+PYPKG='electrum'
+MAIN_SCRIPT='electrum'
 ICONS_FILE='electrum.icns'
 
 for i, x in enumerate(sys.argv):
@@ -15,7 +15,7 @@ for i, x in enumerate(sys.argv):
         VERSION = sys.argv[i+1]
         break
 else:
-    raise BaseException('no version')
+    raise Exception('no version')
 
 electrum = os.path.abspath(".") + "/"
 block_cipher = None
@@ -26,7 +26,6 @@ hiddenimports += collect_submodules('trezorlib')
 hiddenimports += collect_submodules('btchip')
 hiddenimports += collect_submodules('keepkeylib')
 hiddenimports += collect_submodules('websocket')
-hiddenimports += ['_scrypt']
 
 datas = [
     (electrum+'lib/currencies.json', PYPKG),
@@ -44,6 +43,7 @@ datas += collect_data_files('keepkeylib')
 
 # Add libusb so Trezor will work
 binaries = [(electrum + "contrib/build-osx/libusb-1.0.dylib", ".")]
+binaries += [(electrum + "contrib/build-osx/libsecp256k1.0.dylib", ".")]
 
 # Workaround for "Retro Look":
 binaries += [b for b in collect_dynamic_libs('PyQt5') if 'macstyle' in b[0]]

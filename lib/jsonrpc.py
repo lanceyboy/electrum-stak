@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Electrum - lightweight STRAKS client
+# Electrum - lightweight Bitcoin client
 # Copyright (C) 2018 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person

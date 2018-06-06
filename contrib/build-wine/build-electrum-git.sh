@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NAME_ROOT=electrum-stak
+NAME_ROOT=electrum
 PYTHON_VERSION=3.5.4
 
 # These settings probably don't need any change
@@ -19,19 +19,29 @@ set -e
 mkdir -p tmp
 cd tmp
 
-for repo in electrum-stak electrum-locale electrum-stak-icons; do
-    if [ -d $repo ]; then
-	cd $repo
-	git pull
-	git checkout master
-	cd ..
-    else
-	URL=https://github.com/squbs/$repo.git
-	git clone -b master $URL $repo
-    fi
-done
+if [ -d ./electrum ]; then
+  rm ./electrum -rf
+fi
 
-pushd electrum-locale
+git clone https://github.com/spesmilo/electrum -b master
+
+pushd electrum
+if [ ! -z "$1" ]; then
+    # a commit/tag/branch was specified
+    if ! git cat-file -e "$1" 2> /dev/null
+    then  # can't find target
+        # try pull requests
+        git config --local --add remote.origin.fetch '+refs/pull/*/merge:refs/remotes/origin/pr/*'
+        git fetch --all
+    fi
+    git checkout $1
+fi
+
+# Load electrum-icons and electrum-locale for this release
+git submodule init
+git submodule update
+
+pushd ./contrib/deterministic-build/electrum-locale
 for i in ./locale/*; do
     dir=$i/LC_MESSAGES
     mkdir -p $dir
@@ -39,29 +49,23 @@ for i in ./locale/*; do
 done
 popd
 
-pushd electrum-stak
-if [ ! -z "$1" ]; then
-    git checkout $1
-fi
-
-#VERSION=`git describe --tags`
-VERSION="3.0.5"
+VERSION=`git describe --tags --dirty`
 echo "Last commit: $VERSION"
 find -exec touch -d '2000-11-11T11:11:11+00:00' {} +
 popd
 
-rm -rf $WINEPREFIX/drive_c/electrum-stak
-cp -r electrum-stak $WINEPREFIX/drive_c/electrum-stak
-cp electrum-stak/LICENCE .
-cp -r electrum-locale/locale $WINEPREFIX/drive_c/electrum-stak/lib/
-cp electrum-stak-icons/icons_rc.py $WINEPREFIX/drive_c/electrum-stak/gui/qt/
+rm -rf $WINEPREFIX/drive_c/electrum
+cp -r electrum $WINEPREFIX/drive_c/electrum
+cp electrum/LICENCE .
+cp -r ./electrum/contrib/deterministic-build/electrum-locale/locale $WINEPREFIX/drive_c/electrum/lib/
+cp ./electrum/contrib/deterministic-build/electrum-icons/icons_rc.py $WINEPREFIX/drive_c/electrum/gui/qt/
 
 # Install frozen dependencies
 $PYTHON -m pip install -r ../../deterministic-build/requirements.txt
 
 $PYTHON -m pip install -r ../../deterministic-build/requirements-hw.txt
 
-pushd $WINEPREFIX/drive_c/electrum-stak
+pushd $WINEPREFIX/drive_c/electrum
 $PYTHON setup.py install
 popd
 
@@ -78,12 +82,12 @@ find -exec touch -d '2000-11-11T11:11:11+00:00' {} +
 popd
 
 # build NSIS installer
-# $VERSION could be passed to the electrum-stak.nsi script, but this would require some rewriting in the script iself.
+# $VERSION could be passed to the electrum.nsi script, but this would require some rewriting in the script itself.
 wine "$WINEPREFIX/drive_c/Program Files (x86)/NSIS/makensis.exe" /DPRODUCT_VERSION=$VERSION electrum.nsi
 
 cd dist
-mv electrum-stak-setup.exe $NAME_ROOT-$VERSION-setup.exe
+mv electrum-setup.exe $NAME_ROOT-$VERSION-setup.exe
 cd ..
 
 echo "Done."
-md5sum dist/electrum-stak*exe
+md5sum dist/electrum*exe

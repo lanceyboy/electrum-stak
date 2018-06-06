@@ -1,7 +1,7 @@
 #!/usr/bin/env python2
 # -*- mode: python -*-
 #
-# Electrum - lightweight STRAKS client
+# Electrum - lightweight Bitcoin client
 # Copyright (C) 2016  The Electrum developers
 #
 # Permission is hereby granted, free of charge, to any person
@@ -24,8 +24,9 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from electrum_stak.plugins import BasePlugin, hook
-from electrum_stak.i18n import _
+from electrum.plugins import BasePlugin, hook
+from electrum.i18n import _
+from electrum.bitcoin import is_address
 
 
 class HW_PluginBase(BasePlugin):
@@ -51,3 +52,26 @@ class HW_PluginBase(BasePlugin):
         for keystore in wallet.get_keystores():
             if isinstance(keystore, self.keystore_class):
                 self.device_manager().unpair_xpub(keystore.xpub)
+
+    def setup_device(self, device_info, wizard, purpose):
+        """Called when creating a new wallet or when using the device to decrypt
+        an existing wallet. Select the device to use.  If the device is
+        uninitialized, go through the initialization process.
+        """
+        raise NotImplementedError()
+
+    def show_address(self, wallet, address, keystore=None):
+        pass  # implemented in child classes
+
+    def show_address_helper(self, wallet, address, keystore=None):
+        if keystore is None:
+            keystore = wallet.get_keystore()
+        if not is_address(address):
+            keystore.handler.show_error(_('Invalid Bitcoin Address'))
+            return False
+        if not wallet.is_mine(address):
+            keystore.handler.show_error(_('Address not in wallet.'))
+            return False
+        if type(keystore) != self.keystore_class:
+            return False
+        return True

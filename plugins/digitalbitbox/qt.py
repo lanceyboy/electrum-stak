@@ -1,9 +1,12 @@
+from functools import partial
+
 from ..hw_wallet.qt import QtHandlerBase, QtPluginBase
 from .digitalbitbox import DigitalBitboxPlugin
 
-from electrum_stak.i18n import _
-from electrum_stak.plugins import hook
-from electrum_stak.wallet import Standard_Wallet
+from electrum.i18n import _
+from electrum.plugins import hook
+from electrum.wallet import Standard_Wallet
+
 
 class Plugin(DigitalBitboxPlugin, QtPluginBase):
     icon_unpaired = ":icons/digitalbitbox_unpaired.png"
@@ -29,16 +32,9 @@ class Plugin(DigitalBitboxPlugin, QtPluginBase):
 
         if len(addrs) == 1:
             def show_address():
-                change, index = wallet.get_address_index(addrs[0])
-                keypath = '%s/%d/%d' % (keystore.derivation, change, index)
-                xpub = self.get_client(keystore)._get_xpub(keypath)
-                verify_request_payload = {
-                    "type": 'p2pkh',
-                    "echo": xpub['echo'],
-                    }
-                self.comserver_post_notification(verify_request_payload)
+                keystore.thread.add(partial(self.show_address, wallet, addrs[0], keystore))
 
-            menu.addAction(_("Show on %s") % self.device, show_address)
+            menu.addAction(_("Show on {}").format(self.device), show_address)
 
 
 class DigitalBitbox_Handler(QtHandlerBase):

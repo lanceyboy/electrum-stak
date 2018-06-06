@@ -1,8 +1,8 @@
-name: electrum-stak
+name: electrum
 version: master
-summary: STRAKS thin client
+summary: Bitcoin thin client
 description: |
-  Lightweight STRAKS client
+  Lightweight Bitcoin client
 
 grade: devel # must be 'stable' to release into candidate/stable channels
 confinement: strict

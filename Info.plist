@@ -6,10 +6,10 @@
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>straks</string>
+      <string>bitcoin</string>
       <key>CFBundleURLSchemes</key>
       <array>
-        <string>straks</string>
+        <string>bitcoin</string>
       </array>
     </dict>
   </array>

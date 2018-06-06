@@ -1,4 +1,4 @@
-# Electrum - lightweight STRAKS client
+# Electrum - lightweight Bitcoin client
 # Copyright (C) 2011 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -24,11 +24,13 @@ import binascii
 import os, sys, re, json
 from collections import defaultdict
 from datetime import datetime
+import decimal
 from decimal import Decimal
 import traceback
 import urllib
 import threading
 import hmac
+import stat
 
 from .i18n import _
 
@@ -40,8 +42,26 @@ def inv_dict(d):
     return {v: k for k, v in d.items()}
 
 
-base_units = {'STAK':8, 'mSTAK':5, 'bits':2}
-fee_levels = [_('Within 25 blocks'), _('Within 10 blocks'), _('Within 5 blocks'), _('Within 2 blocks'), _('In the next block')]
+base_units = {'BTC':8, 'mBTC':5, 'bits':2, 'sat':0}
+base_units_inverse = inv_dict(base_units)
+base_units_list = ['BTC', 'mBTC', 'bits', 'sat']  # list(dict) does not guarantee order
+
+
+def decimal_point_to_base_unit_name(dp: int) -> str:
+    # e.g. 8 -> "BTC"
+    try:
+        return base_units_inverse[dp]
+    except KeyError:
+        raise Exception('Unknown base unit')
+
+
+def base_unit_name_to_decimal_point(unit_name: str) -> int:
+    # e.g. "BTC" -> 8
+    try:
+        return base_units[unit_name]
+    except KeyError:
+        raise Exception('Unknown base unit')
+
 
 def normalize_version(v):
     return [int(x) for x in re.sub(r'(\.0+)*$','', v).split(".")]
@@ -58,17 +78,86 @@ class InvalidPassword(Exception):
     def __str__(self):
         return _("Incorrect password")
 
+
+class FileImportFailed(Exception):
+    def __init__(self, message=''):
+        self.message = str(message)
+
+    def __str__(self):
+        return _("Failed to import from file.") + "\n" + self.message
+
+
+class FileExportFailed(Exception):
+    def __init__(self, message=''):
+        self.message = str(message)
+
+    def __str__(self):
+        return _("Failed to export to file.") + "\n" + self.message
+
+
+class TimeoutException(Exception):
+    def __init__(self, message=''):
+        self.message = str(message)
+
+    def __str__(self):
+        if not self.message:
+            return _("Operation timed out.")
+        return self.message
+
+
+class WalletFileException(Exception): pass
+
+
+class BitcoinException(Exception): pass
+
+
 # Throw this exception to unwind the stack like when an error occurs.
 # However unlike other exceptions the user won't be informed.
 class UserCancelled(Exception):
     '''An exception that is suppressed from the user'''
     pass
 
+class Satoshis(object):
+    def __new__(cls, value):
+        self = super(Satoshis, cls).__new__(cls)
+        self.value = value
+        return self
+
+    def __repr__(self):
+        return 'Satoshis(%d)'%self.value
+
+    def __str__(self):
+        return format_satoshis(self.value) + " BTC"
+
+class Fiat(object):
+    def __new__(cls, value, ccy):
+        self = super(Fiat, cls).__new__(cls)
+        self.ccy = ccy
+        self.value = value
+        return self
+
+    def __repr__(self):
+        return 'Fiat(%s)'% self.__str__()
+
+    def __str__(self):
+        if self.value.is_nan():
+            return _('No Data')
+        else:
+            return "{:.2f}".format(self.value) + ' ' + self.ccy
+
 class MyEncoder(json.JSONEncoder):
     def default(self, obj):
         from .transaction import Transaction
         if isinstance(obj, Transaction):
             return obj.as_dict()
+        if isinstance(obj, Satoshis):
+            return str(obj)
+        if isinstance(obj, Fiat):
+            return str(obj)
+        if isinstance(obj, Decimal):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat(' ')[:-3]
         return super(MyEncoder, self).default(obj)
 
 class PrintError(object):
@@ -237,7 +326,7 @@ def android_data_dir():
     return PythonActivity.mActivity.getFilesDir().getPath() + '/data'
 
 def android_headers_dir():
-    d = android_ext_dir() + '/org.electrum_stak.electrum_stak'
+    d = android_ext_dir() + '/org.electrum.electrum'
     if not os.path.exists(d):
         os.mkdir(d)
     return d
@@ -246,7 +335,7 @@ def android_check_data_dir():
     """ if needed, move old directory to sandbox """
     ext_dir = android_ext_dir()
     data_dir = android_data_dir()
-    old_electrum_dir = ext_dir + '/electrum_stak'
+    old_electrum_dir = ext_dir + '/electrum'
     if not os.path.exists(data_dir) and os.path.exists(old_electrum_dir):
         import shutil
         new_headers_path = android_headers_dir() + '/blockchain_headers'
@@ -258,8 +347,29 @@ def android_check_data_dir():
         shutil.move(old_electrum_dir, data_dir)
     return data_dir
 
+
 def get_headers_dir(config):
     return android_headers_dir() if 'ANDROID_DATA' in os.environ else config.path
+
+
+def assert_datadir_available(config_path):
+    path = config_path
+    if os.path.exists(path):
+        return
+    else:
+        raise FileNotFoundError(
+            'Electrum datadir does not exist. Was it deleted while running?' + '\n' +
+            'Should be at {}'.format(path))
+
+
+def assert_file_in_datadir_available(path, config_path):
+    if os.path.exists(path):
+        return
+    else:
+        assert_datadir_available(config_path)
+        raise FileNotFoundError(
+            'Cannot find file but datadir is there.' + '\n' +
+            'Should be at {}'.format(path))
 
 
 def assert_bytes(*args):
@@ -327,11 +437,11 @@ def user_dir():
     if 'ANDROID_DATA' in os.environ:
         return android_check_data_dir()
     elif os.name == 'posix':
-        return os.path.join(os.environ["HOME"], ".electrum-stak")
+        return os.path.join(os.environ["HOME"], ".electrum")
     elif "APPDATA" in os.environ:
-        return os.path.join(os.environ["APPDATA"], "Electrum-STAK")
+        return os.path.join(os.environ["APPDATA"], "Electrum")
     elif "LOCALAPPDATA" in os.environ:
-        return os.path.join(os.environ["LOCALAPPDATA"], "Electrum-STAK")
+        return os.path.join(os.environ["LOCALAPPDATA"], "Electrum")
     else:
         #raise Exception("No home directory found in environment variables.")
         return
@@ -344,20 +454,18 @@ def format_satoshis_plain(x, decimal_point = 8):
     return "{:.8f}".format(Decimal(x) / scale_factor).rstrip('0').rstrip('.')
 
 
-def format_satoshis(x, is_diff=False, num_zeros = 0, decimal_point = 8, whitespaces=False):
+def format_satoshis(x, num_zeros=0, decimal_point=8, precision=None, is_diff=False, whitespaces=False):
     from locale import localeconv
     if x is None:
         return 'unknown'
-    x = int(x)  # Some callers pass Decimal
-    scale_factor = pow (10, decimal_point)
-    integer_part = "{:n}".format(int(abs(x) / scale_factor))
-    if x < 0:
-        integer_part = '-' + integer_part
-    elif is_diff:
-        integer_part = '+' + integer_part
+    if precision is None:
+        precision = decimal_point
+    decimal_format = ".0" + str(precision) if precision > 0 else ""
+    if is_diff:
+        decimal_format = '+' + decimal_format
+    result = ("{:" + decimal_format + "f}").format(x / pow (10, decimal_point)).rstrip('0')
+    integer_part, fract_part = result.split(".")
     dp = localeconv()['decimal_point']
-    fract_part = ("{:0" + str(decimal_point) + "}").format(abs(x) % scale_factor)
-    fract_part = fract_part.rstrip('0')
     if len(fract_part) < num_zeros:
         fract_part += "0" * (num_zeros - len(fract_part))
     result = integer_part + dp + fract_part
@@ -366,11 +474,26 @@ def format_satoshis(x, is_diff=False, num_zeros = 0, decimal_point = 8, whitespa
         result = " " * (15 - len(result)) + result
     return result
 
-def timestamp_to_datetime(timestamp):
-    try:
-        return datetime.fromtimestamp(timestamp)
-    except:
+
+FEERATE_PRECISION = 1  # num fractional decimal places for sat/byte fee rates
+_feerate_quanta = Decimal(10) ** (-FEERATE_PRECISION)
+
+
+def format_fee_satoshis(fee, num_zeros=0):
+    return format_satoshis(fee, num_zeros, 0, precision=FEERATE_PRECISION)
+
+
+def quantize_feerate(fee):
+    """Strip sat/byte fee rate of excess precision."""
+    if fee is None:
         return None
+    return Decimal(fee).quantize(_feerate_quanta, rounding=decimal.ROUND_HALF_DOWN)
+
+
+def timestamp_to_datetime(timestamp):
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp)
 
 def format_time(timestamp):
     date = timestamp_to_datetime(timestamp)
@@ -430,23 +553,50 @@ def time_difference(distance_in_time, include_seconds):
     else:
         return "over %d years" % (round(distance_in_minutes / 525600))
 
-
 mainnet_block_explorers = {
-    'straks.info': ('https://straks.info',
-                        {'tx': 'transaction', 'addr': 'address'})
+    'Biteasy.com': ('https://www.biteasy.com/blockchain/',
+                        {'tx': 'transactions/', 'addr': 'addresses/'}),
+    'Bitflyer.jp': ('https://chainflyer.bitflyer.jp/',
+                        {'tx': 'Transaction/', 'addr': 'Address/'}),
+    'Blockchain.info': ('https://blockchain.info/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'blockchainbdgpzk.onion': ('https://blockchainbdgpzk.onion/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'Blockr.io': ('https://btc.blockr.io/',
+                        {'tx': 'tx/info/', 'addr': 'address/info/'}),
+    'Blocktrail.com': ('https://www.blocktrail.com/BTC/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'BTC.com': ('https://chain.btc.com/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'Chain.so': ('https://www.chain.so/',
+                        {'tx': 'tx/BTC/', 'addr': 'address/BTC/'}),
+    'Insight.is': ('https://insight.bitpay.com/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'TradeBlock.com': ('https://tradeblock.com/blockchain/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'BlockCypher.com': ('https://live.blockcypher.com/btc/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
+    'Blockchair.com': ('https://blockchair.com/bitcoin/',
+                        {'tx': 'transaction/', 'addr': 'address/'}),
+    'blockonomics.co': ('https://www.blockonomics.co/',
+                        {'tx': 'api/tx?txid=', 'addr': '#/search?q='}),
+    'system default': ('blockchain:/',
+                        {'tx': 'tx/', 'addr': 'address/'}),
 }
 
 testnet_block_explorers = {
-    'straks.info': ('https://testnet.straks.info',
-                        {'tx': 'transaction', 'addr': 'address'})
+    'Blocktrail.com': ('https://www.blocktrail.com/tBTC/',
+                       {'tx': 'tx/', 'addr': 'address/'}),
+    'system default': ('blockchain://000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943/',
+                       {'tx': 'tx/', 'addr': 'address/'}),
 }
 
 def block_explorer_info():
-    from . import bitcoin
-    return testnet_block_explorers if bitcoin.NetworkConstants.TESTNET else mainnet_block_explorers
+    from . import constants
+    return testnet_block_explorers if constants.net.TESTNET else mainnet_block_explorers
 
 def block_explorer(config):
-    return config.get('block_explorer', 'straks.info')
+    return config.get('block_explorer', 'Blocktrail.com')
 
 def block_explorer_tuple(config):
     return block_explorer_info().get(block_explorer(config))
@@ -459,7 +609,7 @@ def block_explorer_URL(config, kind, item):
     if not kind_str:
         return
     url_parts = [be_tuple[0], kind_str, item]
-    return "/".join(url_parts)
+    return ''.join(url_parts)
 
 # URL decode
 #_ud = re.compile('%([0-9a-hA-H]{2})', re.MULTILINE)
@@ -471,12 +621,12 @@ def parse_URI(uri, on_pr=None):
 
     if ':' not in uri:
         if not bitcoin.is_address(uri):
-            raise BaseException("Not a straks address")
+            raise Exception("Not a bitcoin address")
         return {'address': uri}
 
     u = urllib.parse.urlparse(uri)
-    if u.scheme != 'straks':
-        raise BaseException("Not a straks URI")
+    if u.scheme != 'bitcoin':
+        raise Exception("Not a bitcoin URI")
     address = u.path
 
     # python for android fails to parse query
@@ -493,7 +643,7 @@ def parse_URI(uri, on_pr=None):
     out = {k: v[0] for k, v in pq.items()}
     if address:
         if not bitcoin.is_address(address):
-            raise BaseException("Invalid straks address:" + address)
+            raise Exception("Invalid bitcoin address:" + address)
         out['address'] = address
     if 'amount' in out:
         am = out['amount']
@@ -543,7 +693,7 @@ def create_URI(addr, amount, message):
         query.append('amount=%s'%format_satoshis_plain(amount))
     if message:
         query.append('message=%s'%urllib.parse.quote(message))
-    p = urllib.parse.ParseResult(scheme='straks', netloc='', path=addr, params='', query='&'.join(query), fragment='')
+    p = urllib.parse.ParseResult(scheme='bitcoin', netloc='', path=addr, params='', query='&'.join(query), fragment='')
     return urllib.parse.urlunparse(p)
 
 
@@ -642,10 +792,6 @@ class SocketPipe:
                 print_error("SSLError:", e)
                 time.sleep(0.1)
                 continue
-            except OSError as e:
-                print_error("OSError", e)
-                time.sleep(0.1)
-                continue
 
 
 class QueuePipe:
@@ -682,3 +828,65 @@ class QueuePipe:
             self.send(request)
 
 
+
+
+def setup_thread_excepthook():
+    """
+    Workaround for `sys.excepthook` thread bug from:
+    http://bugs.python.org/issue1230540
+
+    Call once from the main thread before creating any threads.
+    """
+
+    init_original = threading.Thread.__init__
+
+    def init(self, *args, **kwargs):
+
+        init_original(self, *args, **kwargs)
+        run_original = self.run
+
+        def run_with_except_hook(*args2, **kwargs2):
+            try:
+                run_original(*args2, **kwargs2)
+            except Exception:
+                sys.excepthook(*sys.exc_info())
+
+        self.run = run_with_except_hook
+
+    threading.Thread.__init__ = init
+
+
+def versiontuple(v):
+    return tuple(map(int, (v.split("."))))
+
+
+def import_meta(path, validater, load_meta):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            d = validater(json.loads(f.read()))
+        load_meta(d)
+    #backwards compatibility for JSONDecodeError
+    except ValueError:
+        traceback.print_exc(file=sys.stderr)
+        raise FileImportFailed(_("Invalid JSON code."))
+    except BaseException as e:
+        traceback.print_exc(file=sys.stdout)
+        raise FileImportFailed(e)
+
+
+def export_meta(meta, fileName):
+    try:
+        with open(fileName, 'w+', encoding='utf-8') as f:
+            json.dump(meta, f, indent=4, sort_keys=True)
+    except (IOError, os.error) as e:
+        traceback.print_exc(file=sys.stderr)
+        raise FileExportFailed(e)
+
+
+def make_dir(path, allow_symlink=True):
+    """Make directory if it does not yet exist."""
+    if not os.path.exists(path):
+        if not allow_symlink and os.path.islink(path):
+            raise Exception('Dangling link: ' + path)
+        os.mkdir(path)
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)

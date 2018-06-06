@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight STRAKS client
+# Electrum - lightweight Bitcoin client
 # Copyright (C) 2014 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -30,22 +30,20 @@ from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import QPushButton
 
-from electrum_stak import bitcoin, util
-from electrum_stak import transaction
-from electrum_stak.plugins import BasePlugin, hook
-from electrum_stak.i18n import _
-from electrum_stak.wallet import Multisig_Wallet
-from electrum_stak.util import bh2u, bfh
+from electrum import bitcoin, util, keystore, ecc
+from electrum import transaction
+from electrum.plugins import BasePlugin, hook
+from electrum.i18n import _
+from electrum.wallet import Multisig_Wallet
+from electrum.util import bh2u, bfh
 
-from electrum_stak_gui.qt.transaction_dialog import show_transaction
+from electrum_gui.qt.transaction_dialog import show_transaction
 
 import sys
 import traceback
 
 
-PORT = 12344
-HOST = 'cosigner.electrum.org'
-server = ServerProxy('http://%s:%d'%(HOST,PORT), allow_none=True)
+server = ServerProxy('https://cosigner.electrum.org/', allow_none=True)
 
 
 class Listener(util.DaemonThread):
@@ -162,7 +160,7 @@ class Plugin(BasePlugin):
             d.cosigner_send_button.hide()
 
     def cosigner_can_sign(self, tx, cosigner_xpub):
-        from electrum_stak.keystore import is_xpubkey, parse_xpubkey
+        from electrum.keystore import is_xpubkey, parse_xpubkey
         xpub_set = set([])
         for txin in tx.inputs():
             for x_pubkey in txin['x_pubkeys']:
@@ -175,14 +173,17 @@ class Plugin(BasePlugin):
         for window, xpub, K, _hash in self.cosigner_list:
             if not self.cosigner_can_sign(tx, xpub):
                 continue
-            message = bitcoin.encrypt_message(bfh(tx.raw), bh2u(K)).decode('ascii')
+            raw_tx_bytes = bfh(str(tx))
+            public_key = ecc.ECPubkey(K)
+            message = public_key.encrypt_message(raw_tx_bytes).decode('ascii')
             try:
                 server.put(_hash, message)
             except Exception as e:
                 traceback.print_exc(file=sys.stdout)
-                window.show_message("Failed to send transaction to cosigning pool.")
+                window.show_error(_("Failed to send transaction to cosigning pool") + ':\n' + str(e))
                 return
-            window.show_message("Your transaction was sent to the cosigning pool.\nOpen your cosigner wallet to retrieve it.")
+            window.show_message(_("Your transaction was sent to the cosigning pool.") + '\n' +
+                                _("Open your cosigner wallet to retrieve it."))
 
     def on_receive(self, keyhash, message):
         self.print_error("signal arrived for", keyhash)
@@ -194,25 +195,32 @@ class Plugin(BasePlugin):
             return
 
         wallet = window.wallet
-        if wallet.has_password():
-            password = window.password_dialog('An encrypted transaction was retrieved from cosigning pool.\nPlease enter your password to decrypt it.')
+        if isinstance(wallet.keystore, keystore.Hardware_KeyStore):
+            window.show_warning(_('An encrypted transaction was retrieved from cosigning pool.') + '\n' +
+                                _('However, hardware wallets do not support message decryption, '
+                                  'which makes them not compatible with the current design of cosigner pool.'))
+            return
+        elif wallet.has_keystore_encryption():
+            password = window.password_dialog(_('An encrypted transaction was retrieved from cosigning pool.') + '\n' +
+                                              _('Please enter your password to decrypt it.'))
             if not password:
                 return
         else:
             password = None
-            if not window.question(_("An encrypted transaction was retrieved from cosigning pool.\nDo you want to open it now?")):
+            if not window.question(_("An encrypted transaction was retrieved from cosigning pool.") + '\n' +
+                                   _("Do you want to open it now?")):
                 return
 
         xprv = wallet.keystore.get_master_private_key(password)
         if not xprv:
             return
         try:
-            k = bh2u(bitcoin.deserialize_xprv(xprv)[-1])
-            EC = bitcoin.EC_KEY(bfh(k))
+            k = bitcoin.deserialize_xprv(xprv)[-1]
+            EC = ecc.ECPrivkey(k)
             message = bh2u(EC.decrypt_message(message))
         except Exception as e:
             traceback.print_exc(file=sys.stdout)
-            window.show_message(str(e))
+            window.show_error(_('Error decrypting message') + ':\n' + str(e))
             return
 
         self.listener.clear(keyhash)

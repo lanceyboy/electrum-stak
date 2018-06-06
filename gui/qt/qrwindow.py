@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight STRAKS client
+# Electrum - lightweight Bitcoin client
 # Copyright (C) 2014 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -29,8 +29,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import QHBoxLayout, QVBoxLayout, QLabel, QWidget
 
-from electrum_stak_gui.qt.qrcodewidget import QRCodeWidget
-from electrum_stak.i18n import _
+from electrum_gui.qt.qrcodewidget import QRCodeWidget
+from electrum.i18n import _
 
 if platform.system() == 'Windows':
     MONOSPACE_FONT = 'Lucida Console'
